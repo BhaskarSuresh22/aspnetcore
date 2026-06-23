@@ -3,6 +3,12 @@ Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.QueryParameterNam
 Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.QueryParameterNamePrefix.set -> void
 Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.OnRowClick.get -> Microsoft.AspNetCore.Components.EventCallback<TGridItem>
 Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.OnRowClick.set -> void
+Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.ColumnOverscanCount.get -> int
+Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.ColumnOverscanCount.set -> void
+Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.ColumnSize.get -> float
+Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.ColumnSize.set -> void
+Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.VirtualizeColumns.get -> bool
+Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.VirtualizeColumns.set -> void
 override Microsoft.AspNetCore.Components.QuickGrid.Paginator.OnInitialized() -> void
 override Microsoft.AspNetCore.Components.QuickGrid.Paginator.OnParametersSetAsync() -> System.Threading.Tasks.Task!
 override Microsoft.AspNetCore.Components.QuickGrid.QuickGrid<TGridItem>.OnInitialized() -> void

@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Linq;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Components.QuickGrid.Infrastructure;
 using Microsoft.AspNetCore.Components.Routing;
 using Microsoft.AspNetCore.Components.Web.Virtualization;
@@ -73,6 +74,24 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
     [Parameter] public int OverscanCount { get; set; } = 3;
 
     /// <summary>
+    /// If true, the grid will virtualize columns based on the horizontal scroll viewport,
+    /// rendering only the visible range plus <see cref="ColumnOverscanCount"/>.
+    /// </summary>
+    [Parameter] public bool VirtualizeColumns { get; set; }
+
+    /// <summary>
+    /// This is applicable only when using <see cref="VirtualizeColumns"/>. It defines an expected width
+    /// in pixels for each column, allowing the virtualization mechanism to determine which columns are visible.
+    /// </summary>
+    [Parameter] public float ColumnSize { get; set; } = 150;
+
+    /// <summary>
+    /// This is applicable only when using <see cref="VirtualizeColumns"/>. It defines how many additional
+    /// columns are rendered before and after the visible horizontal viewport.
+    /// </summary>
+    [Parameter] public int ColumnOverscanCount { get; set; } = 2;
+
+    /// <summary>
     /// This is applicable only when using <see cref="Virtualize"/>. It defines an expected height in pixels for
     /// each row, allowing the virtualization mechanism to fetch the correct number of items to match the display
     /// size and to ensure accurate scrolling.
@@ -126,6 +145,7 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
     [Inject] private NavigationManager NavigationManager { get; set; } = default!;
 
     private ElementReference _tableReference;
+    private ElementReference _scrollContainerReference;
     private Virtualize<(int, TGridItem)>? _virtualizeComponent;
     private int _ariaBodyRowCount;
     private ICollection<TGridItem> _currentNonVirtualizedViewItems = Array.Empty<TGridItem>();
@@ -151,6 +171,8 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
     // The associated ES6 module, which uses document-level event listeners
     private IJSObjectReference? _jsModule;
     private IJSObjectReference? _jsEventDisposable;
+    private IJSObjectReference? _jsHorizontalEventDisposable;
+    private DotNetObjectReference<QuickGrid<TGridItem>>? _selfReference;
 
     // Caches of method->delegate conversions
     private readonly RenderFragment _renderColumnHeaders;
@@ -173,6 +195,11 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
     private bool _firstRefreshDataAsync = true;
 
     private (string ColumnTitle, bool Ascending)? _cachedSortFromQuery;
+    private int _firstRenderedColumnIndex;
+    private int _lastRenderedColumnIndex = -1;
+    private double _horizontalScrollLeft;
+    private double _horizontalViewportWidth;
+    private bool _isHorizontalViewportInitialized;
 
     private string SortQueryParameterNameBy => QueryParameterNamePrefix == "" ? "sort" : $"{QueryParameterNamePrefix}_sort";
     private string SortQueryParameterNameOrder => QueryParameterNamePrefix == "" ? "order" : $"{QueryParameterNamePrefix}_order";
@@ -212,6 +239,21 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
         // The associated pagination state may have been added/removed/replaced
         _currentPageItemsChanged.SubscribeOrMove(Pagination?.CurrentPageItemsChanged);
 
+        if (VirtualizeColumns && ColumnSize <= 0)
+        {
+            throw new InvalidOperationException($"{nameof(ColumnSize)} must be greater than zero when {nameof(VirtualizeColumns)} is enabled.");
+        }
+
+        if (ColumnOverscanCount < 0)
+        {
+            throw new InvalidOperationException($"{nameof(ColumnOverscanCount)} cannot be negative.");
+        }
+
+        if (Pagination is not null && (Virtualize || VirtualizeColumns))
+        {
+            throw new InvalidOperationException($"{nameof(Pagination)} cannot be used with {nameof(Virtualize)} or {nameof(VirtualizeColumns)}.");
+        }
+
         if (Pagination is { } pagination)
         {
             pagination.QueryName = PageQueryParameterName;
@@ -234,6 +276,8 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
         var mustRefreshData = dataSourceHasChanged
             || (Pagination?.GetHashCode() != _lastRefreshedPaginationStateHash);
 
+        TryUpdateRenderedColumnRange();
+
         // We don't want to trigger the first data load until we've collected the initial set of columns,
         // because they might perform some action like setting the default sort order, so it would be wasteful
         // to have to re-query immediately
@@ -253,6 +297,11 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
                 return;
             }
             _jsEventDisposable = await _jsModule.InvokeAsync<IJSObjectReference>("init", _tableReference);
+        }
+
+        if (_jsModule is not null)
+        {
+            await UpdateHorizontalVirtualizationSubscriptionAsync();
         }
 
         if (_checkColumnOptionsPosition && _displayOptionsForColumn is not null)
@@ -297,6 +346,7 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
     private void FinishCollectingColumns()
     {
         _collectingColumns = false;
+        TryUpdateRenderedColumnRange();
     }
 
     /// <summary>
@@ -543,7 +593,7 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
 
     private string GridClass()
     {
-        var gridClass = $"quickgrid {Class} {(_pendingDataLoadCancellationTokenSource is null ? null : "loading")}";
+        var gridClass = $"quickgrid {Class} {(VirtualizeColumns ? "virtualize-columns" : null)} {(_pendingDataLoadCancellationTokenSource is null ? null : "loading")}";
         return AttributeUtilities.CombineClassNames(AdditionalAttributes, gridClass) ?? string.Empty;
     }
 
@@ -556,6 +606,119 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
         Align.Right => $"col-justify-right {column.Class}",
         _ => column.Class,
     };
+
+    internal IEnumerable<(ColumnBase<TGridItem> Column, int ColumnIndex)> GetRenderedColumnsWithIndexes()
+    {
+        if (!VirtualizeColumns || !_isHorizontalViewportInitialized || _columns.Count == 0)
+        {
+            for (var index = 0; index < _columns.Count; index++)
+            {
+                yield return (_columns[index], index);
+            }
+
+            yield break;
+        }
+
+        for (var index = _firstRenderedColumnIndex; index <= _lastRenderedColumnIndex; index++)
+        {
+            yield return (_columns[index], index);
+        }
+    }
+
+    internal int? AriaColumnCount => VirtualizeColumns ? _columns.Count : null;
+
+    internal bool RenderLeftColumnSpacer => VirtualizeColumns && _isHorizontalViewportInitialized && _firstRenderedColumnIndex > 0;
+
+    internal bool RenderRightColumnSpacer => VirtualizeColumns && _isHorizontalViewportInitialized && _lastRenderedColumnIndex >= 0 && _lastRenderedColumnIndex < _columns.Count - 1;
+
+    internal string LeftColumnSpacerStyle => SpacerCellStyle(_firstRenderedColumnIndex * ColumnSize);
+
+    internal string RightColumnSpacerStyle => SpacerCellStyle((_columns.Count - _lastRenderedColumnIndex - 1) * ColumnSize);
+
+    internal string ScrollContainerClass => VirtualizeColumns ? "quickgrid-scroll-container" : string.Empty;
+
+    private static string SpacerCellStyle(float width)
+        => $"width: {width}px; min-width: {width}px; max-width: {width}px; padding: 0; border: 0;";
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "IDE0051:Remove unused private members", Justification = "Invoked from JavaScript via JS interop.")]
+    [JSInvokable]
+    [SuppressMessage("Style", "IDE0051:Remove unused private members", Justification = "Invoked from JavaScript via JS interop.")]
+    private Task OnHorizontalViewportChanged(double scrollLeft, double clientWidth)
+    {
+        _horizontalScrollLeft = Math.Max(0, scrollLeft);
+        _horizontalViewportWidth = Math.Max(0, clientWidth);
+        _isHorizontalViewportInitialized = true;
+
+        return TryUpdateRenderedColumnRange() ? InvokeAsync(StateHasChanged) : Task.CompletedTask;
+    }
+
+    private async Task UpdateHorizontalVirtualizationSubscriptionAsync()
+    {
+        if (_jsModule is null)
+        {
+            return;
+        }
+
+        if (VirtualizeColumns)
+        {
+            if (_jsHorizontalEventDisposable is null)
+            {
+                _selfReference ??= DotNetObjectReference.Create(this);
+                _jsHorizontalEventDisposable = await _jsModule.InvokeAsync<IJSObjectReference>("initHorizontalVirtualization", _scrollContainerReference, _selfReference);
+            }
+        }
+        else if (_jsHorizontalEventDisposable is not null)
+        {
+            await _jsHorizontalEventDisposable.InvokeVoidAsync("stop");
+            await _jsHorizontalEventDisposable.DisposeAsync();
+            _jsHorizontalEventDisposable = null;
+            _isHorizontalViewportInitialized = false;
+            _firstRenderedColumnIndex = 0;
+            _lastRenderedColumnIndex = _columns.Count - 1;
+        }
+    }
+
+    private bool TryUpdateRenderedColumnRange()
+    {
+        var totalColumns = _columns.Count;
+
+        if (!VirtualizeColumns || totalColumns == 0 || !_isHorizontalViewportInitialized)
+        {
+            var allStart = 0;
+            var allEnd = totalColumns - 1;
+            return UpdateRenderedColumnRange(allStart, allEnd);
+        }
+
+        var rawStart = (int)Math.Floor(_horizontalScrollLeft / ColumnSize);
+        var visibleCount = Math.Max(1, (int)Math.Ceiling(_horizontalViewportWidth / ColumnSize));
+
+        var start = Math.Max(0, rawStart - ColumnOverscanCount);
+        var end = Math.Min(totalColumns - 1, start + visibleCount + (2 * ColumnOverscanCount) - 1);
+
+        return UpdateRenderedColumnRange(start, end);
+    }
+
+    private bool UpdateRenderedColumnRange(int start, int end)
+    {
+        if (start == _firstRenderedColumnIndex && end == _lastRenderedColumnIndex)
+        {
+            return false;
+        }
+
+        _firstRenderedColumnIndex = start;
+        _lastRenderedColumnIndex = end;
+
+        if (_displayOptionsForColumn is not null)
+        {
+            var displayedColumnIndex = _columns.IndexOf(_displayOptionsForColumn);
+            if (displayedColumnIndex < _firstRenderedColumnIndex || displayedColumnIndex > _lastRenderedColumnIndex)
+            {
+                _displayOptionsForColumn = null;
+            }
+        }
+
+        return true;
+    }
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
@@ -572,6 +735,12 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
                 await _jsEventDisposable.DisposeAsync();
             }
 
+            if (_jsHorizontalEventDisposable is not null)
+            {
+                await _jsHorizontalEventDisposable.InvokeVoidAsync("stop");
+                await _jsHorizontalEventDisposable.DisposeAsync();
+            }
+
             if (_jsModule is not null)
             {
                 await _jsModule.DisposeAsync();
@@ -581,6 +750,11 @@ public partial class QuickGrid<TGridItem> : IAsyncDisposable
         {
             // The JS side may routinely be gone already if the reason we're disposing is that
             // the client disconnected. This is not an error.
+        }
+        finally
+        {
+            _selfReference?.Dispose();
+            _selfReference = null;
         }
     }
 }

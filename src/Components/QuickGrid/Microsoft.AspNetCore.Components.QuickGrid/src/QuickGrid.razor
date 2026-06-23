@@ -1,7 +1,9 @@
-﻿@using Microsoft.AspNetCore.Components.QuickGrid.Infrastructure
+﻿@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.QuickGrid.Infrastructure
 @using Microsoft.AspNetCore.Components.Rendering
 @using Microsoft.AspNetCore.Components.Web
 @using Microsoft.AspNetCore.Components.Web.Virtualization
+@namespace Microsoft.AspNetCore.Components.QuickGrid
 @typeparam TGridItem
 <CascadingValue TValue="InternalGridContext<TGridItem>" IsFixed="true" Value="@_internalGridContext">
     @{ StartCollectingColumns(); }
@@ -10,29 +12,31 @@
         @{ FinishCollectingColumns(); }
         <ColumnsCollectedNotifier TGridItem="TGridItem" />
 
-        <table theme="@Theme" aria-rowcount="@(_ariaBodyRowCount + 1)" @ref="_tableReference" @onclosecolumnoptions="HideColumnOptionsAsync" @attributes="AdditionalAttributes" class="@GridClass()">
-            <thead>
-                <tr>
-                    @_renderColumnHeaders
-                </tr>
-            </thead>
-            <tbody>
-                @if (Virtualize)
-                {
-                    <Virtualize @ref="@_virtualizeComponent"
-                        TItem="(int RowIndex, TGridItem Data)"
-                        ItemSize="@ItemSize"
-                        OverscanCount="@OverscanCount"
-                        ItemsProvider="@ProvideVirtualizedItems"
-                        ItemContent="@(item => builder => RenderRow(builder, item.RowIndex, item.Data))"
-                        Placeholder="@(placeholderContext => builder => RenderPlaceholderRow(builder, placeholderContext))" />
-                }
-                else
-                {
-                    @_renderNonVirtualizedRows
-                }
-            </tbody>
-        </table>
+        <div class="@ScrollContainerClass" @ref="_scrollContainerReference">
+            <table theme="@Theme" aria-rowcount="@(_ariaBodyRowCount + 1)" aria-colcount="@AriaColumnCount" @ref="_tableReference" @onclosecolumnoptions="HideColumnOptionsAsync" @attributes="AdditionalAttributes" class="@GridClass()">
+                <thead>
+                    <tr>
+                        @_renderColumnHeaders
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (Virtualize)
+                    {
+                        <Virtualize @ref="@_virtualizeComponent"
+                            TItem="(int RowIndex, TGridItem Data)"
+                            ItemSize="@ItemSize"
+                            OverscanCount="@OverscanCount"
+                            ItemsProvider="@ProvideVirtualizedItems"
+                            ItemContent="@(item => builder => RenderRow(builder, item.RowIndex, item.Data))"
+                            Placeholder="@(placeholderContext => builder => RenderPlaceholderRow(builder, placeholderContext))" />
+                    }
+                    else
+                    {
+                        @_renderNonVirtualizedRows
+                    }
+                </tbody>
+            </table>
+        </div>
     </Defer>
 </CascadingValue>
 
@@ -54,9 +58,19 @@
             while (rowIndex++ < initialRowIndex + Pagination.ItemsPerPage)
             {
                 <tr>
-                    @foreach (var col in _columns)
+                    @if (RenderLeftColumnSpacer)
                     {
-                        <td class="@ColumnClass(col)" @key="@col"></td>
+                        <td class="col-spacer" style="@LeftColumnSpacerStyle" aria-hidden="true"></td>
+                    }
+
+                    @foreach (var renderedCol in GetRenderedColumnsWithIndexes())
+                    {
+                        <td class="@ColumnClass(renderedCol.Column)" aria-colindex="@(renderedCol.ColumnIndex + 1)" @key="@renderedCol.Column"></td>
+                    }
+
+                    @if (RenderRightColumnSpacer)
+                    {
+                        <td class="col-spacer" style="@RightColumnSpacerStyle" aria-hidden="true"></td>
                     }
                 </tr>
             }
@@ -75,9 +89,19 @@
             aria-rowindex="@rowIndex"
             class="@combinedClass"
             @onclick="@rowClick">
-            @foreach (var col in _columns)
+            @if (RenderLeftColumnSpacer)
             {
-                <td class="@ColumnClass(col)" @key="@col">@{ col.CellContent(__builder, item); }</td>
+                <td class="col-spacer" style="@LeftColumnSpacerStyle" aria-hidden="true"></td>
+            }
+
+            @foreach (var renderedCol in GetRenderedColumnsWithIndexes())
+            {
+                <td class="@ColumnClass(renderedCol.Column)" aria-colindex="@(renderedCol.ColumnIndex + 1)" @key="@renderedCol.Column">@{ renderedCol.Column.CellContent(__builder, item); }</td>
+            }
+
+            @if (RenderRightColumnSpacer)
+            {
+                <td class="col-spacer" style="@RightColumnSpacerStyle" aria-hidden="true"></td>
             }
         </tr>
     }
@@ -85,25 +109,45 @@
     private void RenderPlaceholderRow(RenderTreeBuilder __builder, PlaceholderContext placeholderContext)
     {
         <tr aria-rowindex="@(placeholderContext.Index + 1)">
-            @foreach (var col in _columns)
+            @if (RenderLeftColumnSpacer)
             {
-                <td class="grid-cell-placeholder @ColumnClass(col)" @key="@col">@{ col.RenderPlaceholderContent(__builder, placeholderContext); }</td>
+                <td class="col-spacer" style="@LeftColumnSpacerStyle" aria-hidden="true"></td>
+            }
+
+            @foreach (var renderedCol in GetRenderedColumnsWithIndexes())
+            {
+                <td class="grid-cell-placeholder @ColumnClass(renderedCol.Column)" aria-colindex="@(renderedCol.ColumnIndex + 1)" @key="@renderedCol.Column">@{ renderedCol.Column.RenderPlaceholderContent(__builder, placeholderContext); }</td>
+            }
+
+            @if (RenderRightColumnSpacer)
+            {
+                <td class="col-spacer" style="@RightColumnSpacerStyle" aria-hidden="true"></td>
             }
         </tr>
     }
 
     private void RenderColumnHeaders(RenderTreeBuilder __builder)
     {
-        foreach (var col in _columns)
+        if (RenderLeftColumnSpacer)
         {
-            <th class="@ColumnHeaderClass(col)" aria-sort="@AriaSortValue(col)" @key="@col" scope="col">
-                <div class="col-header-content">@col.HeaderContent</div>
+            <th class="col-spacer" style="@LeftColumnSpacerStyle" aria-hidden="true"></th>
+        }
 
-                @if (col == _displayOptionsForColumn)
+        foreach (var renderedCol in GetRenderedColumnsWithIndexes())
+        {
+            <th class="@ColumnHeaderClass(renderedCol.Column)" aria-sort="@AriaSortValue(renderedCol.Column)" aria-colindex="@(renderedCol.ColumnIndex + 1)" @key="@renderedCol.Column" scope="col">
+                <div class="col-header-content">@renderedCol.Column.HeaderContent</div>
+
+                @if (renderedCol.Column == _displayOptionsForColumn)
                 {
-                    <div class="col-options">@col.ColumnOptions</div>
+                    <div class="col-options">@renderedCol.Column.ColumnOptions</div>
                 }
             </th>
+        }
+
+        if (RenderRightColumnSpacer)
+        {
+            <th class="col-spacer" style="@RightColumnSpacerStyle" aria-hidden="true"></th>
         }
     }
 }

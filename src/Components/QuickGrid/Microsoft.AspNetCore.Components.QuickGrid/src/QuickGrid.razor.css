@@ -121,3 +121,20 @@ html[dir=rtl] .col-justify-end .col-options {
 tr.row-clickable {
     cursor: pointer;
 }
+
+.quickgrid-scroll-container {
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
+}
+
+table.quickgrid.virtualize-columns {
+    width: max-content;
+    min-width: 100%;
+}
+
+th.col-spacer,
+td.col-spacer {
+    padding: 0;
+    border: 0;
+}

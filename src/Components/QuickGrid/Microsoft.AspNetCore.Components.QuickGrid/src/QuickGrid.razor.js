@@ -50,3 +50,40 @@ export function checkColumnOptionsPosition(tableElement) {
     }
 }
 
+export function initHorizontalVirtualization(scrollContainer, dotNetRef) {
+    let rafHandle = 0;
+
+    const notifyViewport = () => {
+        rafHandle = 0;
+        dotNetRef.invokeMethodAsync('OnHorizontalViewportChanged', scrollContainer.scrollLeft, scrollContainer.clientWidth);
+    };
+
+    const queueViewportNotification = () => {
+        if (rafHandle !== 0) {
+            return;
+        }
+
+        rafHandle = requestAnimationFrame(notifyViewport);
+    };
+
+    const onScroll = () => queueViewportNotification();
+    const onResize = () => queueViewportNotification();
+
+    scrollContainer.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onResize);
+
+    queueViewportNotification();
+
+    return {
+        stop: () => {
+            if (rafHandle !== 0) {
+                cancelAnimationFrame(rafHandle);
+                rafHandle = 0;
+            }
+
+            scrollContainer.removeEventListener('scroll', onScroll);
+            window.removeEventListener('resize', onResize);
+        }
+    };
+}
+
