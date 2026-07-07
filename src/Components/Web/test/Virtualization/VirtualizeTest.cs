@@ -1264,7 +1264,6 @@ public class VirtualizeTest
     [Fact]
     public async Task ColumnVirtualize_ThrowsWhenColumnSizeNonPositive()
     {
-        // Test that column virtualization throws when ColumnSize is not positive
         var rootComponent = new VirtualizeTestHostcomponent
         {
             InnerContent = BuildVirtualize(0f, EmptyItemsProvider<int>, null)
@@ -1288,8 +1287,6 @@ public class VirtualizeTest
     [Fact]
     public async Task ColumnVirtualize_ColumnOverscanCountCannotBeNegative()
     {
-        // Test that ColumnOverscanCount validation prevents negative values
-        // This ensures sensible column overscan configuration
         var mockJs = new Mock<IJSRuntime>(MockBehavior.Loose);
 
         var serviceProvider = new ServiceCollection()
@@ -1298,8 +1295,6 @@ public class VirtualizeTest
 
         var testRenderer = new TestRenderer(serviceProvider);
 
-        // While we can't directly test QuickGrid in VirtualizeTest.cs, we validate
-        // that negative ColumnOverscanCount is properly constrained
         Assert.True(-1 < 0, "Negative ColumnOverscanCount should be rejected at component level");
     }
 
@@ -1329,7 +1324,6 @@ public class VirtualizeTest
 
         var callbacks = (IVirtualizeJsCallbacks)renderedVirtualize;
 
-        // Trigger a spacer callback to render items
         await testRenderer.Dispatcher.InvokeAsync(() =>
             callbacks.OnAfterSpacerVisible(0f, 500f, 500f));
 
@@ -1341,8 +1335,8 @@ public class VirtualizeTest
     [Fact]
     public async Task ColumnVirtualize_ColumnSpacersRenderCorrectly()
     {
-        // Test that left and right column spacers render with appropriate styles
-        // when column virtualization is active
+        // Test that left and right column spacers render with the same
+        // data-attribute infrastructure used by row virtualization.
         Virtualize<int> renderedVirtualize = null;
         var items = Enumerable.Range(1, 50).ToList();
 
@@ -1362,18 +1356,18 @@ public class VirtualizeTest
         await testRenderer.RenderRootComponentAsync(componentId);
         Assert.NotNull(renderedVirtualize);
 
-        // After rendering, verify spacer infrastructure exists
-        // Column spacers (left/right) should have appropriate attributes for virtualization
+        // After rendering, verify spacer infrastructure exists in the render tree.
+        // Virtualize emits before/after spacer elements sized via the
+        // data-blazor-virtualize-reserved-height attribute
         var referenceFrames = testRenderer.Batches.SelectMany(b => b.ReferenceFrames).ToList();
 
-        // Spacers should use data attributes for sizing (consistent with row virtualization)
+        // Spacers should use data attributes for sizing
         var spacerAttributes = referenceFrames
             .Where(f => f.FrameType == RenderTreeFrameType.Attribute
-                     && (f.AttributeName?.Contains("virtualize") ?? false))
+                     && f.AttributeName == "data-blazor-virtualize-reserved-height")
             .ToList();
 
-        Assert.True(spacerAttributes.Count >= 0,
-            "Column virtualization should use consistent data attributes for spacers");
+        Assert.NotEmpty(spacerAttributes);
     }
 
     [Fact]
@@ -1402,7 +1396,6 @@ public class VirtualizeTest
 
         var callbacks = (IVirtualizeJsCallbacks)renderedVirtualize;
 
-        // Trigger initial render
         await testRenderer.Dispatcher.InvokeAsync(() =>
             callbacks.OnAfterSpacerVisible(0f, 500f, 500f));
 
@@ -1412,8 +1405,6 @@ public class VirtualizeTest
         await testRenderer.Dispatcher.InvokeAsync(() =>
             callbacks.OnAfterSpacerVisible(0f, 500f, 500f));
 
-        // Item count should remain consistent for row virtualization
-        // (column virtualization operates independently on column axis)
         Assert.True(renderedVirtualize._lastRenderedItemCount > 0,
             "Column virtualization should not disrupt row-based item rendering");
     }
@@ -1444,20 +1435,15 @@ public class VirtualizeTest
 
         var callbacks = (IVirtualizeJsCallbacks)renderedVirtualize;
 
-        // Trigger multiple render cycles
         for (int i = 0; i < 3; i++)
         {
             await testRenderer.Dispatcher.InvokeAsync(() =>
                 callbacks.OnAfterSpacerVisible(0f, 500f, 500f));
         }
 
-        // Verify that measurements accumulate, indicating proper rendering
-        // and item height calculations
         Assert.True(renderedVirtualize._measuredItemCount >= 0,
             "Overscan rendering should accumulate measurements");
 
-        // With overscan, the component renders more items than strictly visible
-        // to reduce flickering during scroll. Verify by checking rendered item count
         Assert.True(renderedVirtualize._lastRenderedItemCount > 0,
             "Overscan should result in items being rendered");
     }
@@ -1488,7 +1474,6 @@ public class VirtualizeTest
 
         var callbacks = (IVirtualizeJsCallbacks)renderedVirtualize;
 
-        // Initial render with row virtualization
         await testRenderer.Dispatcher.InvokeAsync(() =>
             callbacks.OnAfterSpacerVisible(0f, 750f, 500f));
 
@@ -1499,13 +1484,11 @@ public class VirtualizeTest
         await testRenderer.Dispatcher.InvokeAsync(() =>
             callbacks.OnAfterSpacerVisible(0f, 750f, 500f));
 
-        // Both dimensions should be active
         Assert.True(renderedVirtualize._itemsBefore >= 0,
             "Row virtualization index should be valid");
         Assert.True(renderedVirtualize.OverscanCount >= 0,
             "Column overscan count should be valid");
 
-        // Verify no state corruption from dual virtualization by checking measurements
         Assert.True(renderedVirtualize._measuredItemCount >= 0,
             "Measurements should remain consistent with dual virtualization");
     }
