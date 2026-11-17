@@ -65,13 +65,14 @@ function findClosestScrollContainer(element: HTMLElement | null): HTMLElement | 
 }
 
 function getScaleFactor(spacerBefore: HTMLElement, spacerAfter: HTMLElement): number {
-  const el = spacerBefore.offsetHeight > 0 ? spacerBefore
-    : spacerAfter.offsetHeight > 0 ? spacerAfter
-    : null;
-  if (!el) {
+  const spacerBeforeHeight = spacerBefore.offsetHeight;
+  const spacerAfterHeight = spacerAfter.offsetHeight;
+  const maxSpacerHeight = Math.max(spacerBeforeHeight, spacerAfterHeight);
+  if (maxSpacerHeight === 0) {
     return 1;
   }
-  const scale = el.getBoundingClientRect().height / el.offsetHeight;
+  const spacer = spacerBeforeHeight > spacerAfterHeight ? spacerBefore : spacerAfter;
+  const scale = spacer.getBoundingClientRect().height / maxSpacerHeight;
   return (Number.isFinite(scale) && scale > 0) ? scale : 1;
 }
 
